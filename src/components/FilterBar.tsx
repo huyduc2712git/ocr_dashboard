@@ -1,5 +1,6 @@
 import React from 'react';
-import { Download, X, ArrowUpDown, Bot } from 'lucide-react';
+import { Download, X, ArrowUpDown, Bot, Columns, LayoutList, Table } from 'lucide-react';
+import { ViewMode } from '../types';
 
 interface FilterBarProps {
   modelFilter: string;
@@ -11,6 +12,8 @@ interface FilterBarProps {
   onSortOrderChange: (order: 'asc' | 'desc') => void;
   limit: number;
   onLimitChange: (limit: number) => void;
+  viewMode?: ViewMode;
+  onViewModeChange?: (mode: ViewMode) => void;
   onExportCsv: () => void;
   onExportJson: () => void;
   totalResults: number;
@@ -65,67 +68,69 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   const currentSortKey = `${sortField}_${sortOrder}`;
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-6 shadow-md">
+    <div className="bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 mb-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         
-        {/* Left Side: Status & Active Filter indicator / Sort options */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* Left Side: Status / Active Filter indicator & View Mode */}
+        <div className="flex flex-wrap items-center gap-2.5 text-xs">
           
-          {/* Active Model Filter Tag (if filtered via Top Cards) */}
+          {/* Active Model Filter Tag */}
           {modelFilter ? (
-            <div className="flex items-center gap-2 bg-purple-950/80 border border-purple-600/80 rounded-xl px-3 py-1.5 text-xs font-bold text-purple-200 shadow-sm">
-              <Bot className="w-4 h-4 text-purple-400" />
+            <div className="flex items-center gap-1.5 bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-1 text-xs font-bold text-purple-800 shadow-xs">
+              <Bot className="w-3.5 h-3.5 text-purple-600" />
               <span>Đang lọc: {modelFilter}</span>
               <button
                 onClick={() => onModelChange('')}
-                className="hover:bg-purple-800/60 p-0.5 rounded-full transition-colors cursor-pointer ml-1"
+                className="hover:bg-purple-100 p-0.5 rounded-full transition-colors cursor-pointer ml-1 text-purple-700"
                 title="Bỏ lọc model"
               >
-                <X className="w-3.5 h-3.5 text-purple-300" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           ) : (
-            <div className="text-xs font-bold text-slate-400 flex items-center gap-1.5 px-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Đang hiển thị: <strong className="text-white font-mono">{totalResults}</strong> bản ghi (Toàn bộ 3 Model AI)</span>
+            <div className="text-xs font-bold text-slate-600 flex items-center gap-1.5 px-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Hiển thị: <strong className="text-slate-900 font-mono text-xs">{totalResults}</strong> bản ghi</span>
             </div>
           )}
 
+
+
           {/* Sort Selection Dropdown */}
-          <div className="flex items-center gap-2 bg-slate-950 border border-amber-800/80 rounded-xl px-3 py-1.5 text-xs text-slate-300 shadow-inner">
-            <ArrowUpDown className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-slate-400 font-medium">Sắp xếp:</span>
+          <div className="flex items-center gap-1.5 bg-amber-50/80 border border-amber-200 rounded-lg px-2.5 py-1 text-xs text-amber-900 shadow-inner">
+            <ArrowUpDown className="w-3.5 h-3.5 text-amber-600" />
+            <span className="text-amber-800 font-medium">Sắp xếp:</span>
             <select
               value={currentSortKey}
               onChange={handleSortSelectChange}
-              className="bg-transparent text-amber-200 font-bold text-xs outline-none cursor-pointer pr-1"
+              className="bg-transparent text-amber-900 font-bold text-xs outline-none cursor-pointer pr-1"
             >
-              <option value="model_used_asc" className="bg-slate-900 text-slate-200">Mặc định: Theo Model AI (A-Z)</option>
-              <option value="model_used_desc" className="bg-slate-900 text-slate-200">Theo Model AI (Z-A)</option>
-              <option value="accuracy_desc" className="bg-slate-900 text-slate-200">Độ chính xác (Cao -&gt; Thấp)</option>
-              <option value="execution_time_asc" className="bg-slate-900 text-slate-200">Thời gian xử lý (Nhanh -&gt; Chậm)</option>
-              <option value="id_desc" className="bg-slate-900 text-slate-200">ID Mới nhất (Giảm dần)</option>
-              <option value="id_asc" className="bg-slate-900 text-slate-200">ID Cũ nhất (Tăng dần)</option>
+              <option value="model_used_asc" className="bg-white text-slate-800">Model AI (A-Z)</option>
+              <option value="model_used_desc" className="bg-white text-slate-800">Model AI (Z-A)</option>
+              <option value="accuracy_desc" className="bg-white text-slate-800">Accuracy (Cao -&gt; Thấp)</option>
+              <option value="execution_time_asc" className="bg-white text-slate-800">Thời gian (Nhanh -&gt; Chậm)</option>
+              <option value="id_desc" className="bg-white text-slate-800">ID Mới nhất</option>
+              <option value="id_asc" className="bg-white text-slate-800">ID Cũ nhất</option>
             </select>
           </div>
 
         </div>
 
         {/* Right Side: Rows per page & Export Actions */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           
           {/* Limit selector */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <div className="flex items-center gap-1.5 text-xs text-slate-600">
             <span>Số lượng:</span>
             <select
               value={limit}
               onChange={(e) => onLimitChange(Number(e.target.value))}
-              className="bg-slate-950 border border-slate-800 text-slate-200 font-bold text-xs rounded-xl px-2.5 py-1.5 outline-none cursor-pointer"
+              className="bg-slate-100 border border-slate-300 text-slate-800 font-bold text-xs rounded-lg px-2.5 py-1 outline-none cursor-pointer"
             >
-              <option value={70} className="bg-slate-900">Tất cả 70 bản ghi (Full)</option>
-              <option value={100} className="bg-slate-900">100 bản ghi</option>
-              <option value={50} className="bg-slate-900">50 bản ghi</option>
-              <option value={20} className="bg-slate-900">20 bản ghi</option>
+              <option value={70} className="bg-white">Tất cả 70</option>
+              <option value={100} className="bg-white">100 bản ghi</option>
+              <option value={50} className="bg-white">50 bản ghi</option>
+              <option value={20} className="bg-white">20 bản ghi</option>
             </select>
           </div>
 
@@ -133,19 +138,19 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={onExportCsv}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all shadow-sm cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition-all cursor-pointer shadow-xs"
               title="Xuất file CSV"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              <Download className="w-3.5 h-3.5 text-emerald-600" />
               <span>Xuất CSV</span>
             </button>
 
             <button
               onClick={onExportJson}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all shadow-sm cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition-all cursor-pointer shadow-xs"
               title="Xuất file JSON"
             >
-              <Download className="w-3.5 h-3.5 text-amber-400" />
+              <Download className="w-3.5 h-3.5 text-amber-600" />
               <span>Xuất JSON</span>
             </button>
           </div>

@@ -16,40 +16,163 @@ export function extractDigits(str?: string): string {
   return str.replace(/\D/g, '');
 }
 
-// Extract recipient phone from Ground Truth
-export function getRecipientPhoneGT(gt?: string): string {
-  if (!gt) return '';
-  const lines = gt.split('\n');
-  const phones: string[] = [];
-  for (const line of lines) {
-    if (/đIỆN THOẠI|điện thoại|sđt|phone/i.test(line)) {
-      const d = extractDigits(line);
-      if (d.length >= 8) phones.push(d);
-    }
+// Normalize phone number for standard comparison (e.g. 84912345678 -> 0912345678)
+export function normalizePhoneNumber(phoneStr?: string): string {
+  if (!phoneStr) return '';
+  let digits = extractDigits(phoneStr);
+  if (digits.startsWith('84') && digits.length === 11) {
+    digits = '0' + digits.slice(2);
   }
-  if (phones.length > 0) return phones[phones.length - 1];
-  const allDigits = gt.match(/\b\d{9,11}\b/g) || [];
-  return allDigits.length > 0 ? allDigits[allDigits.length - 1] : '';
+  return digits;
 }
 
-// Extract recipient phone from OCR text
-export function getRecipientPhoneOCR(r: OcrRecord): string {
-  if (r.phone) {
-    const d = extractDigits(r.phone);
-    if (d.length >= 8) return d;
-  }
-  const text = r.raw_text || r.ocr_text || '';
+// Helper to extract a valid phone number pattern from text block (prioritizes recipient phone)
+export function extractPhonePattern(text?: string): string {
   if (!text) return '';
-  const lines = text.split('\n');
-  const phones: string[] = [];
-  for (const line of lines) {
-    if (/đIỆN THOẠI|điện thoại|sđt|phone/i.test(line)) {
-      const d = extractDigits(line);
-      if (d.length >= 8) phones.push(d);
+
+  // 1. Try extracting phone from RECIPIENT section first (after "NGƯỜI NHẬN", "KHÁCH HÀNG", "RECIPIENT", etc.)
+  const recipientMatch = text.match(/(?:người\s*nhận|nguoi\s*nhan|khách\s*hàng|khach\s*hang|recipient|consignee|to:)([\s\S]*)/i);
+  const targetText = recipientMatch ? recipientMatch[1] : text;
+
+  // Helper to extract all valid phone patterns from a text block
+  const findAllPhones = (t: string): string[] => {
+    const phones: string[] = [];
+    const lines = t.split('\n');
+    for (const line of lines) {
+      if (/đIỆN THOẠI|điện thoại|sđt|sdt|đt|phone|tel|mobile/i.test(line)) {
+        const matches = line.match(/(?:\+?84|84|0)[\s\.\-]?[35789](?:[\s\.\-]?\d){8}/g)
+          || line.match(/(?:\+?84|84|0)[\s\.\-]?\d{2,3}[\s\.\-]?\d{3}[\s\.\-]?\d{3,4}/g);
+        if (matches) {
+          for (const m of matches) {
+            const norm = normalizePhoneNumber(m);
+            if (norm.length >= 9 && norm.length <= 11) phones.push(norm);
+          }
+        } else {
+          const lineDigits = extractDigits(line);
+          if (lineDigits.length >= 9 && lineDigits.length <= 11) {
+            phones.push(normalizePhoneNumber(lineDigits));
+          }
+        }
+      }
+    }
+
+    if (phones.length === 0) {
+      const matches = t.match(/(?:\+?84|84|0)[\s\.\-]?[35789](?:[\s\.\-]?\d){8}/g);
+      if (matches) {
+        for (const m of matches) {
+          const norm = normalizePhoneNumber(m);
+          if (norm.length >= 9 && norm.length <= 11) phones.push(norm);
+        }
+      }
+    }
+
+    if (phones.length === 0) {
+      const standalone = t.match(/\b(?:\+?84|84|0)?[35789]\d{8}\b/g)
+        || t.match(/\b(?:\+?84|84|0)?\d{9,11}\b/g);
+      if (standalone) {
+        for (const s of standalone) {
+          const norm = normalizePhoneNumber(s);
+          if (norm.length >= 9 && norm.length <= 11) phones.push(norm);
+        }
+      }
+    }
+    return phones;
+  };
+
+  const recipientPhones = findAllPhones(targetText);
+  if (recipientPhones.length > 0) {
+    return recipientPhones[0];
+  }
+
+  // Fallback: search whole text. If multiple phone numbers found (Sender vs Recipient),
+  // Recipient phone is listed last (bottom of invoice).
+  const allPhones = findAllPhones(text);
+  if (allPhones.length > 0) {
+    return allPhones[allPhones.length - 1]; // Return last phone match (recipient phone)
+  }
+
+  return '';
+}
+
+// Component to render digit-by-digit color-coded phone comparison (green for match, red for mismatch)
+export const ComparePhoneDigits: React.FC<{ ocrPhone?: string; gtPhone?: string }> = ({ ocrPhone, gtPhone }) => {
+  if (!ocrPhone) return <span className="text-slate-400 italic font-sans text-xs">Chưa đọc được</span>;
+  if (!gtPhone) return <span className="font-mono text-slate-700 text-xs">{ocrPhone}</span>;
+
+  const ocrChars = ocrPhone.split('');
+  const gtDigits = extractDigits(gtPhone);
+  let gtDigitIdx = 0;
+
+  return (
+    <span className="font-mono text-xs font-bold tracking-tight inline-flex flex-wrap items-center gap-[0.5px]">
+      {ocrChars.map((char, index) => {
+        if (/\D/.test(char)) {
+          return <span key={index} className="text-slate-400">{char}</span>;
+        }
+
+        const isMatch = gtDigitIdx < gtDigits.length && char === gtDigits[gtDigitIdx];
+        gtDigitIdx++;
+
+        if (isMatch) {
+          return (
+            <span key={index} className="text-emerald-700 font-extrabold">
+              {char}
+            </span>
+          );
+        } else {
+          return (
+            <span key={index} className="text-rose-600 font-extrabold bg-rose-100 px-[2px] rounded border border-rose-200">
+              {char}
+            </span>
+          );
+        }
+      })}
+    </span>
+  );
+};
+
+// Extract recipient phone from Ground Truth (DB phone field or Ground Truth text block)
+export function getRecipientPhoneGT(r: OcrRecord | string | undefined): string {
+  if (!r) return '';
+  if (typeof r === 'string') {
+    return extractPhonePattern(r);
+  }
+  // 1. Prioritize Ground Truth text block extraction
+  const gtTextPhone = extractPhonePattern(r.ground_truth);
+  if (gtTextPhone) {
+    return gtTextPhone;
+  }
+  // 2. Fallback to explicit DB phone field if ground_truth text has no phone
+  if (r.phone) {
+    const norm = normalizePhoneNumber(r.phone);
+    if (norm.length >= 9 && norm.length <= 11) return norm;
+  }
+  return '';
+}
+
+// Extract recipient phone from AI OCR output (raw_text / ocr_text / json_result)
+export function getRecipientPhoneOCR(r: OcrRecord): string {
+  // 1. Check AI JSON output if available
+  if (r.extracted_json || r.json_result) {
+    try {
+      const jsonObj = typeof r.extracted_json === 'string'
+        ? JSON.parse(r.extracted_json)
+        : (r.extracted_json || (typeof r.json_result === 'string' ? JSON.parse(r.json_result) : r.json_result));
+      if (jsonObj && typeof jsonObj === 'object') {
+        const jsonPhone = jsonObj.phone || jsonObj.sdt || jsonObj.dien_thoai || jsonObj.recipient_phone;
+        if (jsonPhone) {
+          const norm = normalizePhoneNumber(String(jsonPhone));
+          if (norm.length >= 9 && norm.length <= 11) return norm;
+        }
+      }
+    } catch {
+      // ignore json parse error
     }
   }
-  if (phones.length > 0) return phones[phones.length - 1];
-  return extractDigits(text);
+
+  // 2. Extract phone pattern from AI's raw OCR text output
+  const text = r.raw_text || r.ocr_text || '';
+  return extractPhonePattern(text);
 }
 
 export const StatsCards: React.FC<StatsCardsProps> = ({
@@ -83,16 +206,20 @@ export const StatsCards: React.FC<StatsCardsProps> = ({
       ? (modelAccuracies.reduce((a, b) => a + b, 0) / modelAccuracies.length).toFixed(1)
       : 'N/A';
 
-    // Phone match count
+    // Phone match count & records with GT phone number
     let phoneMatches = 0;
+    let phoneRecordsCount = 0;
     modelRecords.forEach((r) => {
-      const gt = getRecipientPhoneGT(r.ground_truth);
-      const ocr = getRecipientPhoneOCR(r);
-      if (gt && ocr && gt === ocr) phoneMatches++;
+      const gt = getRecipientPhoneGT(r);
+      if (gt) {
+        phoneRecordsCount++;
+        const ocr = getRecipientPhoneOCR(r);
+        if (ocr && normalizePhoneNumber(gt) === normalizePhoneNumber(ocr)) phoneMatches++;
+      }
     });
 
-    const phoneMatchRate = modelRecords.length > 0
-      ? Math.round((phoneMatches / modelRecords.length) * 100)
+    const phoneMatchRate = phoneRecordsCount > 0
+      ? Math.round((phoneMatches / phoneRecordsCount) * 100)
       : 0;
 
     const isSelected = modelFilter === fullName;
@@ -102,6 +229,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({
       count: modelRecords.length,
       avgAcc,
       phoneMatches,
+      phoneRecordsCount,
       phoneMatchRate,
       isSelected,
     };
@@ -113,13 +241,17 @@ export const StatsCards: React.FC<StatsCardsProps> = ({
 
   // Overall Phone Match Rate
   let totalPhoneMatches = 0;
+  let totalPhoneRecordsCount = 0;
   records.forEach((r) => {
-    const gt = getRecipientPhoneGT(r.ground_truth);
-    const ocr = getRecipientPhoneOCR(r);
-    if (gt && ocr && gt === ocr) totalPhoneMatches++;
+    const gt = getRecipientPhoneGT(r);
+    if (gt) {
+      totalPhoneRecordsCount++;
+      const ocr = getRecipientPhoneOCR(r);
+      if (ocr && normalizePhoneNumber(gt) === normalizePhoneNumber(ocr)) totalPhoneMatches++;
+    }
   });
-  const overallPhoneMatchRate = totalRecords > 0
-    ? Math.round((totalPhoneMatches / totalRecords) * 100)
+  const overallPhoneMatchRate = totalPhoneRecordsCount > 0
+    ? Math.round((totalPhoneMatches / totalPhoneRecordsCount) * 100)
     : 0;
 
   const handleCardClick = (modelName: string) => {
@@ -131,231 +263,113 @@ export const StatsCards: React.FC<StatsCardsProps> = ({
   };
 
   return (
-    <div className="mb-6 space-y-4">
-      {/* Top Bar: Total Benchmark Records & Overall Average Accuracy */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+    <div className="mb-3.5 space-y-2">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 text-xs">
         
-        {/* Total Benchmark Records */}
+        {/* Total Benchmark Records (3 Cols) */}
         <div 
           onClick={() => onModelChange('')}
-          className={`border rounded-2xl p-4 flex items-center justify-between transition-all cursor-pointer shadow-sm ${
+          className={`col-span-12 md:col-span-3 border rounded-xl px-3.5 py-2.5 flex items-center justify-between transition-all cursor-pointer shadow-sm ${
             !modelFilter 
-              ? 'bg-slate-900 border-blue-500/80 ring-2 ring-blue-500/20' 
-              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+              ? 'bg-white border-blue-500 ring-2 ring-blue-500/20' 
+              : 'bg-white border-slate-200 hover:border-slate-300'
           }`}
         >
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-                Tổng Số Bản Ghi Benchmark
-              </span>
-              {!modelFilter && (
-                <span className="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full">
-                  Đang xem tất cả
-                </span>
-              )}
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+              <Layers className="w-4 h-4" />
             </div>
-            <div className="mt-1 flex items-baseline gap-3">
-              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">
-                {loading ? '...' : totalRecords}
-              </span>
-              <span className="text-xs text-blue-400 bg-blue-950/80 border border-blue-800/80 px-2.5 py-0.5 rounded-md font-mono">
-                Full 70 Dataset
-              </span>
+            <div>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">TỔNG BẢN GHI</span>
+              <div className="flex items-baseline gap-1.5 mt-0.5">
+                <span className="text-lg font-extrabold text-slate-900 font-mono">{loading ? '...' : totalRecords}</span>
+                <span className="text-[11px] text-blue-600 font-mono font-bold">Full 70</span>
+              </div>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-              <Layers className="w-3.5 h-3.5 text-blue-400" />
-              Click để xem toàn bộ 3 Model AI
-            </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
-            <Layers className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* Overall Average Accuracy (TỔNG ĐỘ CHÍNH XÁC TB) */}
-        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-slate-900 border border-emerald-800/80 rounded-2xl p-4 flex items-center justify-between shadow-lg">
-          <div>
-            <span className="text-xs font-extrabold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-emerald-400 animate-pulse" />
-              TỔNG ĐỘ CHÍNH XÁC TRUNG BÌNH (OVERALL ACCURACY)
-            </span>
-            <div className="mt-1 flex items-baseline gap-3">
-              <span className="text-3xl font-extrabold text-emerald-300 tracking-tight font-mono">
-                {loading ? '...' : `${overallAvgAccuracy}%`}
-              </span>
-              <span className="text-xs text-emerald-300 bg-emerald-900/80 border border-emerald-700/80 px-2.5 py-0.5 rounded-full font-bold">
-                {records.length} Mẫu
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-1 flex items-center gap-1">
-              <PhoneCall className="w-3.5 h-3.5 text-emerald-400" />
-              Khớp SĐT chính xác: <strong className="text-emerald-300 font-mono ml-1">{totalPhoneMatches}/{totalRecords} ({overallPhoneMatchRate}%)</strong>
-            </p>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-inner">
-            <Percent className="w-6 h-6" />
-          </div>
-        </div>
-
-      </div>
-
-      {/* 3 Model AI Clickable Cards */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-          <span className="font-semibold flex items-center gap-1.5">
-            <Filter className="w-3.5 h-3.5 text-purple-400" />
-            Click chọn Model AI bên dưới để lọc danh sách:
-          </span>
-          {modelFilter && (
-            <button
-              onClick={() => onModelChange('')}
-              className="text-xs font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-            >
-              Hiển thị lại Tất Cả 3 Model
-            </button>
+          {!modelFilter && (
+            <span className="text-[11px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-md">Tất cả</span>
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          
-          {/* Model 1: ChatGPT GPT 5.4 Nano */}
-          <div
-            onClick={() => handleCardClick(chatGptStats.fullName)}
-            className={`rounded-2xl p-4 transition-all cursor-pointer relative shadow-sm border ${
-              chatGptStats.isSelected
-                ? 'bg-emerald-950/90 border-2 border-emerald-400 ring-2 ring-emerald-500/30 shadow-emerald-950/50 shadow-lg'
-                : 'bg-slate-900/90 border-slate-800 hover:border-emerald-700/60'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center border ${
-                  chatGptStats.isSelected ? 'bg-emerald-500 text-slate-950 border-emerald-300 font-bold' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                }`}>
-                  <Bot className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-emerald-300">{chatGptStats.fullName}</h4>
-                  <span className="text-[10px] text-slate-400 font-mono">{chatGptStats.count} mẫu test</span>
-                </div>
-              </div>
-
-              <div className="text-right">
-                <span className="text-xs font-extrabold text-emerald-300 bg-emerald-950/90 border border-emerald-700/80 px-2.5 py-1 rounded-lg font-mono block">
-                  {chatGptStats.avgAcc}% TB
-                </span>
-              </div>
+        {/* Overall Accuracy Mini Card (4 Cols) */}
+        <div className="col-span-12 md:col-span-4 bg-gradient-to-r from-emerald-50 via-white to-white border border-emerald-200 rounded-xl px-3.5 py-2.5 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-100 border border-emerald-300 text-emerald-700 flex items-center justify-center shrink-0">
+              <Percent className="w-4 h-4" />
             </div>
-
-            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Khớp số điện thoại:</span>
-              <span className="font-mono font-bold text-emerald-300 flex items-center gap-1">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                {chatGptStats.phoneMatches}/{chatGptStats.count} ({chatGptStats.phoneMatchRate}%)
+            <div>
+              <span className="text-[11px] font-extrabold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> ACCURACY TB
               </span>
-            </div>
-
-            {chatGptStats.isSelected && (
-              <div className="mt-2 text-center bg-emerald-500/20 text-emerald-200 text-[10px] font-bold py-0.5 rounded border border-emerald-500/40">
-                ✓ ĐANG LỌC THEO MODEL NÀY
+              <div className="flex items-baseline gap-2 mt-0.5">
+                <span className="text-lg font-extrabold text-emerald-800 font-mono">{loading ? '...' : `${overallAvgAccuracy}%`}</span>
+                <span className="text-[11px] text-emerald-700 font-mono font-bold">SĐT: {totalPhoneMatches}/{totalPhoneRecordsCount} ({overallPhoneMatchRate}%)</span>
               </div>
-            )}
+            </div>
           </div>
-
-          {/* Model 2: Gemini 3.1 Flash-Lite */}
-          <div
-            onClick={() => handleCardClick(geminiStats.fullName)}
-            className={`rounded-2xl p-4 transition-all cursor-pointer relative shadow-sm border ${
-              geminiStats.isSelected
-                ? 'bg-blue-950/90 border-2 border-blue-400 ring-2 ring-blue-500/30 shadow-blue-950/50 shadow-lg'
-                : 'bg-slate-900/90 border-slate-800 hover:border-blue-700/60'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center border ${
-                  geminiStats.isSelected ? 'bg-blue-500 text-slate-950 border-blue-300 font-bold' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                }`}>
-                  <Bot className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-blue-300">{geminiStats.fullName}</h4>
-                  <span className="text-[10px] text-slate-400 font-mono">{geminiStats.count} mẫu test</span>
-                </div>
-              </div>
-
-              <div className="text-right">
-                <span className="text-xs font-extrabold text-blue-300 bg-blue-950/90 border border-blue-700/80 px-2.5 py-1 rounded-lg font-mono block">
-                  {geminiStats.avgAcc}% TB
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Khớp số điện thoại:</span>
-              <span className="font-mono font-bold text-blue-300 flex items-center gap-1">
-                <CheckCircle className="w-3.5 h-3.5 text-blue-400" />
-                {geminiStats.phoneMatches}/{geminiStats.count} ({geminiStats.phoneMatchRate}%)
-              </span>
-            </div>
-
-            {geminiStats.isSelected && (
-              <div className="mt-2 text-center bg-blue-500/20 text-blue-200 text-[10px] font-bold py-0.5 rounded border border-blue-500/40">
-                ✓ ĐANG LỌC THEO MODEL NÀY
-              </div>
-            )}
-          </div>
-
-          {/* Model 3: vintern_python */}
-          <div
-            onClick={() => handleCardClick(vinternStats.fullName)}
-            className={`rounded-2xl p-4 transition-all cursor-pointer relative shadow-sm border ${
-              vinternStats.isSelected
-                ? 'bg-purple-950/90 border-2 border-purple-400 ring-2 ring-purple-500/30 shadow-purple-950/50 shadow-lg'
-                : 'bg-slate-900/90 border-slate-800 hover:border-purple-700/60'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center border ${
-                  vinternStats.isSelected ? 'bg-purple-500 text-slate-950 border-purple-300 font-bold' : 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-                }`}>
-                  <Bot className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-purple-300">{vinternStats.fullName}</h4>
-                  <span className="text-[10px] text-slate-400 font-mono">{vinternStats.count} mẫu test</span>
-                </div>
-              </div>
-
-              <div className="text-right">
-                <span className="text-xs font-extrabold text-purple-300 bg-purple-950/90 border border-purple-700/80 px-2.5 py-1 rounded-lg font-mono block">
-                  {vinternStats.avgAcc}% TB
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Khớp số điện thoại:</span>
-              <span className="font-mono font-bold text-purple-300 flex items-center gap-1">
-                {vinternStats.phoneMatches > 0 ? (
-                  <CheckCircle className="w-3.5 h-3.5 text-purple-400" />
-                ) : (
-                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                )}
-                {vinternStats.phoneMatches}/{vinternStats.count} ({vinternStats.phoneMatchRate}%)
-              </span>
-            </div>
-
-            {vinternStats.isSelected && (
-              <div className="mt-2 text-center bg-purple-500/20 text-purple-200 text-[10px] font-bold py-0.5 rounded border border-purple-500/40">
-                ✓ ĐANG LỌC THEO MODEL NÀY
-              </div>
-            )}
-          </div>
-
         </div>
+
+        {/* AI Models Mini Pills Selector (5 Cols) */}
+        <div className="col-span-12 md:col-span-5 bg-white border border-slate-200 rounded-xl p-1.5 flex items-center justify-between gap-2 shadow-sm">
+          {/* ChatGPT Pill */}
+          <button
+            onClick={() => handleCardClick(chatGptStats.fullName)}
+            className={`flex-1 px-2.5 py-1.5 rounded-lg text-left transition-all border flex flex-col justify-between cursor-pointer ${
+              chatGptStats.isSelected
+                ? 'bg-emerald-100/90 border-emerald-500 ring-2 ring-emerald-500/30 text-emerald-900 shadow-sm'
+                : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-700'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-bold truncate text-emerald-900">ChatGPT</span>
+              <span className="text-xs font-mono font-extrabold text-emerald-700">{chatGptStats.avgAcc}%</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+              <span>{chatGptStats.count} mẫu</span>
+              <span>SĐT {chatGptStats.phoneMatches}/{chatGptStats.phoneRecordsCount}</span>
+            </div>
+          </button>
+
+          {/* Gemini Pill */}
+          <button
+            onClick={() => handleCardClick(geminiStats.fullName)}
+            className={`flex-1 px-2.5 py-1.5 rounded-lg text-left transition-all border flex flex-col justify-between cursor-pointer ${
+              geminiStats.isSelected
+                ? 'bg-blue-100/90 border-blue-500 ring-2 ring-blue-500/30 text-blue-900 shadow-sm'
+                : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-700'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-bold truncate text-blue-900">Gemini</span>
+              <span className="text-xs font-mono font-extrabold text-blue-700">{geminiStats.avgAcc}%</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+              <span>{geminiStats.count} mẫu</span>
+              <span>SĐT {geminiStats.phoneMatches}/{geminiStats.phoneRecordsCount}</span>
+            </div>
+          </button>
+
+          {/* Vintern Pill */}
+          <button
+            onClick={() => handleCardClick(vinternStats.fullName)}
+            className={`flex-1 px-2.5 py-1.5 rounded-lg text-left transition-all border flex flex-col justify-between cursor-pointer ${
+              vinternStats.isSelected
+                ? 'bg-purple-100/90 border-purple-500 ring-2 ring-purple-500/30 text-purple-900 shadow-sm'
+                : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-700'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-bold truncate text-purple-900">Vintern</span>
+              <span className="text-xs font-mono font-extrabold text-purple-700">{vinternStats.avgAcc}%</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+              <span>{vinternStats.count} mẫu</span>
+              <span>SĐT {vinternStats.phoneMatches}/{vinternStats.phoneRecordsCount}</span>
+            </div>
+          </button>
+        </div>
+
       </div>
     </div>
   );

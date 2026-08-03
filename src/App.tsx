@@ -3,10 +3,11 @@ import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
 import { FilterBar } from './components/FilterBar';
 import { OcrCompareView } from './components/OcrCompareView';
+import { OcrSplitView } from './components/OcrSplitView';
 import { ImageModal } from './components/ImageModal';
 import { DetailModal } from './components/DetailModal';
 import { DbInfoModal } from './components/DbInfoModal';
-import { OcrRecord, DbStatus, ApiResponse } from './types';
+import { OcrRecord, DbStatus, ApiResponse, ViewMode } from './types';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function App() {
@@ -18,9 +19,10 @@ export default function App() {
   // Filters & Controls
   const [modelFilter, setModelFilter] = useState<string>('');
   const [page, setPage] = useState<number>(1);
-  const [limit, setLimit] = useState<number>(100);
+  const [limit, setLimit] = useState<number>(70);
   const [sortField, setSortField] = useState<string>('model_used');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [viewMode, setViewMode] = useState<ViewMode>('split');
 
   // Available AI models
   const models = useMemo(() => [
@@ -67,7 +69,6 @@ export default function App() {
         tableName: 'ocr_results',
         page: page.toString(),
         limit: limit.toString(),
-        model: modelFilter,
         demo: forceDemo ? 'true' : 'false',
       });
 
@@ -79,7 +80,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, modelFilter, forceDemo]);
+  }, [page, limit, forceDemo]);
 
   // Initial Load & Auto-Refresh Setup
   useEffect(() => {
@@ -182,7 +183,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-slate-100/80 text-slate-800 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
       
       {/* Top Navigation Header */}
       <Header
@@ -204,16 +205,16 @@ export default function App() {
         
         {/* Notice Banner when in Demo mode */}
         {(forceDemo || apiResponse?.isDemoMode) && (
-          <div className="mb-4 p-3 bg-blue-950/40 border border-blue-800/50 rounded-xl flex items-center justify-between text-xs text-blue-300">
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between text-xs text-blue-800 shadow-sm">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
               <span>
                 <strong>Chế độ Xem Trực Quan Demo:</strong> Đang hiển thị bộ dữ liệu CSDL OCR chuẩn với hình ảnh nhận dạng thực tế.
               </span>
             </div>
             <button
               onClick={() => setIsDbModalOpen(true)}
-              className="underline font-semibold hover:text-white cursor-pointer"
+              className="underline font-semibold hover:text-blue-900 cursor-pointer"
             >
               Cấu hình MySQL
             </button>
@@ -249,29 +250,44 @@ export default function App() {
             setLimit(newLimit);
             setPage(1);
           }}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
           onExportCsv={handleExportCsv}
           onExportJson={handleExportJson}
           totalResults={filteredAndSortedRecords.length}
         />
 
-        {/* Side-by-Side Parallel Comparison View (Ground Truth vs OCR & Phone Match) */}
-        <OcrCompareView
-          records={filteredAndSortedRecords}
-          onRecordClick={(record) => setSelectedDetailRecord(record)}
-          onImageClick={(url, title) => {
-            if (filteredAndSortedRecords.length > 0) {
-              const matched = filteredAndSortedRecords.find(r => r.image_url === url) || filteredAndSortedRecords[0];
-              setSelectedImageRecord(matched);
-            }
-          }}
-        />
+        {/* Dynamic Main View Display: Master-Detail Split View (Default) or Stacked Cards View */}
+        {viewMode === 'split' ? (
+          <OcrSplitView
+            records={filteredAndSortedRecords}
+            onRecordClick={(record) => setSelectedDetailRecord(record)}
+            onImageClick={(url, title) => {
+              if (filteredAndSortedRecords.length > 0) {
+                const matched = filteredAndSortedRecords.find(r => r.image_url === url) || filteredAndSortedRecords[0];
+                setSelectedImageRecord(matched);
+              }
+            }}
+          />
+        ) : (
+          <OcrCompareView
+            records={filteredAndSortedRecords}
+            onRecordClick={(record) => setSelectedDetailRecord(record)}
+            onImageClick={(url, title) => {
+              if (filteredAndSortedRecords.length > 0) {
+                const matched = filteredAndSortedRecords.find(r => r.image_url === url) || filteredAndSortedRecords[0];
+                setSelectedImageRecord(matched);
+              }
+            }}
+          />
+        )}
 
         {/* Pagination Bar */}
         {apiResponse?.pagination && apiResponse.pagination.totalPages > 1 && (
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 gap-3">
-            <div className="text-xs text-slate-400">
-              Trang <span className="font-bold text-white">{page}</span> /{' '}
-              <span className="font-bold text-white">{apiResponse.pagination.totalPages}</span>{' '}
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-3 gap-3 shadow-sm">
+            <div className="text-xs text-slate-600">
+              Trang <span className="font-bold text-slate-900">{page}</span> /{' '}
+              <span className="font-bold text-slate-900">{apiResponse.pagination.totalPages}</span>{' '}
               (Tổng cộng {apiResponse.pagination.total} bản ghi)
             </div>
 
@@ -279,7 +295,7 @@ export default function App() {
               <button
                 onClick={() => setPage((p) => Math.max(p - 1, 1))}
                 disabled={page <= 1}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-medium text-slate-200 flex items-center gap-1 transition-colors cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-xs font-medium text-slate-700 flex items-center gap-1 transition-colors cursor-pointer border border-slate-300"
               >
                 <ChevronLeft className="w-4 h-4" />
                 <span>Trang trước</span>
@@ -288,7 +304,7 @@ export default function App() {
               <button
                 onClick={() => setPage((p) => Math.min(p + 1, apiResponse.pagination.totalPages))}
                 disabled={page >= apiResponse.pagination.totalPages}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-medium text-slate-200 flex items-center gap-1 transition-colors cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-xs font-medium text-slate-700 flex items-center gap-1 transition-colors cursor-pointer border border-slate-300"
               >
                 <span>Trang sau</span>
                 <ChevronRight className="w-4 h-4" />
@@ -331,8 +347,8 @@ export default function App() {
       )}
 
       {/* Footer */}
-      <footer className="mt-12 bg-slate-900 border-t border-slate-800 py-4 text-center text-xs text-slate-500">
-        Dashboard CSDL MySQL OCR Image • Database: <span className="font-mono text-slate-400">upos</span> • Table: <span className="font-mono text-slate-400">image_ocr</span>
+      <footer className="mt-12 bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
+        Dashboard CSDL MySQL OCR Image • Database: <span className="font-mono text-slate-700 font-bold">upos</span> • Table: <span className="font-mono text-slate-700 font-bold">image_ocr</span>
       </footer>
 
     </div>

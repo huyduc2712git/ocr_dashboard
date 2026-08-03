@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3001;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -119,10 +119,93 @@ app.get('/api/tables', async (req, res) => {
   }
 });
 
+// Simple In-Memory TTL Cache
+interface CacheEntry {
+  data: any;
+  expiry: number;
+}
+const cacheMap = new Map<string, CacheEntry>();
+
+function getCache(key: string): any | null {
+  const entry = cacheMap.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiry) {
+    cacheMap.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: any, ttlMs: number = 15000) {
+  cacheMap.set(key, { data, expiry: Date.now() + ttlMs });
+}
+
+// Dedicated Image Endpoint (Lazy-loaded with HTTP Caching)
+app.get('/api/image/:id', async (req, res) => {
+  const imageId = req.params.id;
+  const dbName = (req.query.db as string) || 'image_ocr';
+
+  if (!imageId || imageId === 'null' || imageId === 'undefined') {
+    return res.status(404).send('Image ID required');
+  }
+
+  const cacheKey = `img_${dbName}_${imageId}`;
+  const cachedImg = getCache(cacheKey);
+  if (cachedImg) {
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Content-Type', cachedImg.mimeType);
+    return res.send(cachedImg.buffer);
+  }
+
+  try {
+    const pool = getPoolForDb(dbName);
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      'SELECT image_base64 FROM images WHERE id = ? LIMIT 1',
+      [imageId]
+    );
+
+    let base64Str = rows[0]?.image_base64;
+
+    if (!base64Str) {
+      // Fallback check ocr_results join images
+      const [ocrRows] = await pool.query<mysql.RowDataPacket[]>(
+        'SELECT i.image_base64 FROM ocr_results o JOIN images i ON o.image_id = i.id WHERE o.id = ? LIMIT 1',
+        [imageId]
+      );
+      base64Str = ocrRows[0]?.image_base64;
+    }
+
+    if (!base64Str) {
+      return res.status(404).send('Image not found');
+    }
+
+    let b64: string = base64Str.toString().trim();
+    let mimeType = 'image/jpeg';
+
+    if (b64.startsWith('data:')) {
+      const parts = b64.split(',');
+      const match = parts[0].match(/data:(.*?);base64/);
+      if (match) mimeType = match[1];
+      b64 = parts[1] || '';
+    }
+
+    const imgBuffer = Buffer.from(b64, 'base64');
+    setCache(cacheKey, { buffer: imgBuffer, mimeType }, 3600000); // 1 hour cache
+
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', imgBuffer.length);
+    res.send(imgBuffer);
+  } catch (err: any) {
+    console.error('Error fetching image:', err.message);
+    res.status(500).send('Error fetching image');
+  }
+});
+
 // Fetch OCR Data (From Live MySQL)
 app.get('/api/ocr-data', async (req, res) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 100;
+  const limit = parseInt(req.query.limit as string) || 50;
   const search = ((req.query.search as string) || '').trim();
   const dbName = (req.query.db as string) || 'image_ocr';
   const tableName = (req.query.tableName as string) || 'ocr_results';
@@ -149,19 +232,23 @@ app.get('/api/ocr-data', async (req, res) => {
 
       const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
 
-      // Count total rows
-      const [countRows] = await pool.query<mysql.RowDataPacket[]>(
-        `SELECT COUNT(*) as total FROM ocr_results o${whereClause}`,
-        queryParams
-      );
-      const total = countRows[0]?.total || 0;
+      // Count total rows with short TTL cache
+      const cacheCountKey = `count_${whereClause}_${queryParams.join('_')}`;
+      let total = getCache(cacheCountKey);
+      if (total === null) {
+        const [countRows] = await pool.query<mysql.RowDataPacket[]>(
+          `SELECT COUNT(*) as total FROM ocr_results o${whereClause}`,
+          queryParams
+        );
+        total = countRows[0]?.total || 0;
+        setCache(cacheCountKey, total, 15000);
+      }
 
-      // Query with image_base64 joined - order by model_used first, then id DESC
+      // Fast query WITHOUT heavy image_base64 payload
       const offset = (page - 1) * limit;
       const selectSql = `
-        SELECT o.*, i.image_base64 
+        SELECT o.* 
         FROM ocr_results o 
-        LEFT JOIN images i ON o.image_id = i.id
         ${whereClause} 
         ORDER BY o.model_used ASC, o.id DESC 
         LIMIT ? OFFSET ?
@@ -187,19 +274,16 @@ app.get('/api/ocr-data', async (req, res) => {
         { field: 'created_at', type: 'timestamp', key: '', null: 'NO' },
       ];
 
-      // Format data
+      // Format data - use lightweight image URL
       const formattedData = rows.map(r => {
-        let imageUrl = null;
-        if (r.image_base64) {
-          const b64 = r.image_base64.toString().trim();
-          imageUrl = b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
-        }
+        const imgId = r.image_id || r.id;
+        const imageUrl = imgId ? `/api/image/${imgId}?db=${dbName}` : null;
 
         return {
           id: r.id,
           image_id: r.image_id,
           image_url: imageUrl,
-          image_base64: r.image_base64,
+          image_base64: null,
           name: r.name || '',
           phone: r.phone || '',
           address: r.address || '',
@@ -318,8 +402,19 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server OCR Dashboard running on http://0.0.0.0:${PORT}`);
+  let currentPort = PORT;
+  const server = app.listen(currentPort, '0.0.0.0', () => {
+    console.log(`Server OCR Dashboard running on http://localhost:${currentPort}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      currentPort += 1;
+      console.log(`Port ${currentPort - 1} busy, trying http://localhost:${currentPort}...`);
+      server.listen(currentPort, '0.0.0.0');
+    } else {
+      console.error('Server error:', err);
+    }
   });
 }
 

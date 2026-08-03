@@ -87,5 +87,5 @@ export interface ApiResponse {
   source?: string;
 }
 
-export type ViewMode = 'table' | 'grid' | 'split';
+export type ViewMode = 'split' | 'compare' | 'table';
 
