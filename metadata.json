@@ -1,0 +1,6 @@
+{
+  "name": "Dashboard OCR Image",
+  "description": "Bảng điều khiển quản lý và xem dữ liệu OCR hình ảnh từ MySQL database với tính năng lọc, tìm kiếm, xem trước ảnh và thống kê.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
