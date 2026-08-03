@@ -363,9 +363,15 @@ export const OcrSplitView: React.FC<OcrSplitViewProps> = ({
 
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">
                       <span className="text-slate-500 text-[11px] block">SĐT Chuẩn (Ground Truth)</span>
-                      <span className="font-mono font-bold text-emerald-700 mt-0.5 block">
-                        {activeGtPhone || activeRecord.phone || 'Chưa có'}
-                      </span>
+                      {activeGtPhone ? (
+                        <span className="font-mono font-bold text-emerald-700 mt-0.5 block">
+                          {activeGtPhone}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 italic text-xs mt-0.5 block">
+                          Chưa có
+                        </span>
+                      )}
                     </div>
 
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">

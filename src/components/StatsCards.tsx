@@ -97,7 +97,7 @@ export function extractPhonePattern(text?: string): string {
 // Component to render digit-by-digit color-coded phone comparison (green for match, red for mismatch)
 export const ComparePhoneDigits: React.FC<{ ocrPhone?: string; gtPhone?: string }> = ({ ocrPhone, gtPhone }) => {
   if (!ocrPhone) return <span className="text-slate-400 italic font-sans text-xs">Chưa đọc được</span>;
-  if (!gtPhone) return <span className="font-mono text-slate-700 text-xs">{ocrPhone}</span>;
+  if (!gtPhone) return <span className="text-slate-400 italic font-sans text-xs">Chưa có SĐT chuẩn</span>;
 
   const ocrChars = ocrPhone.split('');
   const gtDigits = extractDigits(gtPhone);
@@ -131,23 +131,14 @@ export const ComparePhoneDigits: React.FC<{ ocrPhone?: string; gtPhone?: string 
   );
 };
 
-// Extract recipient phone from Ground Truth (DB phone field or Ground Truth text block)
+// Extract recipient phone from Ground Truth (strictly from Ground Truth text block)
 export function getRecipientPhoneGT(r: OcrRecord | string | undefined): string {
   if (!r) return '';
   if (typeof r === 'string') {
     return extractPhonePattern(r);
   }
-  // 1. Prioritize Ground Truth text block extraction
-  const gtTextPhone = extractPhonePattern(r.ground_truth);
-  if (gtTextPhone) {
-    return gtTextPhone;
-  }
-  // 2. Fallback to explicit DB phone field if ground_truth text has no phone
-  if (r.phone) {
-    const norm = normalizePhoneNumber(r.phone);
-    if (norm.length >= 9 && norm.length <= 11) return norm;
-  }
-  return '';
+  // Strictly extract from Ground Truth text block (do not pull from DB r.phone field)
+  return extractPhonePattern(r.ground_truth);
 }
 
 // Extract recipient phone from AI OCR output (raw_text / ocr_text / json_result)
