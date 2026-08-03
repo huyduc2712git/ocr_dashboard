@@ -4,14 +4,30 @@ import { fileURLToPath } from 'url';
 import mysql from 'mysql2/promise';
 import { createServer as createViteServer } from 'vite';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let __dirname_var = process.cwd();
+try {
+  if (typeof import.meta !== 'undefined' && import.meta.url) {
+    __dirname_var = path.dirname(fileURLToPath(import.meta.url));
+  } else if (typeof __dirname !== 'undefined') {
+    __dirname_var = __dirname;
+  }
+} catch {
+  __dirname_var = process.cwd();
+}
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Route normalization middleware for Vercel Serverless Functions
+app.use((req, res, next) => {
+  if (!req.url.startsWith('/api') && !req.url.startsWith('/assets') && req.url !== '/' && !req.url.includes('.')) {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+  next();
+});
 
 // Database configuration targeting 14.225.250.17
 const getDbConfig = () => ({
