@@ -6,13 +6,7 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Route normalization middleware for Vercel Serverless Functions
-app.use((req, res, next) => {
-  if (!req.url.startsWith('/api') && !req.url.startsWith('/assets') && req.url !== '/' && !req.url.includes('.')) {
-    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
-  }
-  next();
-});
+
 
 // Database configuration targeting 14.225.250.17
 const getDbConfig = () => ({
