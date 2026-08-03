@@ -348,20 +348,7 @@ app.get('/api/ocr-data', async (req, res) => {
   }
 });
 
-// Catch-all API fallback to guarantee valid JSON responses on Vercel
-app.use('/api', (req, res) => {
-  res.json({
-    success: true,
-    databaseName: 'image_ocr',
-    tableName: 'ocr_results',
-    columns: [],
-    data: FALLBACK_DEMO_RECORDS,
-    pagination: { page: 1, limit: 70, total: FALLBACK_DEMO_RECORDS.length, totalPages: 1 },
-    availableTables: ['ocr_results', 'images'],
-    isDemoMode: true,
-    source: 'FALLBACK_DEMO'
-  });
-});
+
 
 // Global Express Error Handler for Vercel Serverless
 app.use((err: any, req: any, res: any, next: any) => {
